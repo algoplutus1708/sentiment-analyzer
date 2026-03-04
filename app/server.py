@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from app.model import SentimentPredictor
 
+# Author: Swastick
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
