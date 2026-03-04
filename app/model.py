@@ -6,6 +6,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+INFERENCE_VERSION = "hybrid-cal-v2"
+
 
 class SimpleTokenizer:
     def __init__(self, vocab_size=12000):
@@ -204,6 +206,7 @@ class SentimentPredictor:
         self.model.to(self.device)
         self.model.eval()
         self.max_len = self.model_config.get("max_len", 160)
+        self.inference_version = INFERENCE_VERSION
         self.negative_idx = self._find_class_index("negative", default=0)
         self.positive_idx = self._find_class_index("positive", default=1)
 
@@ -219,7 +222,10 @@ class SentimentPredictor:
             "loved", "joy", "joyful", "best", "fantastic", "wonderful", "brilliant",
             "excited", "calm", "peaceful", "pleased", "delight", "satisfied"
         }
-        self.negators = {"not", "never", "no", "isn't", "wasn't", "don't", "didn't", "cant", "can't"}
+        self.negators = {
+            "not", "never", "no", "isn't", "wasn't", "don't", "didn't",
+            "cant", "can't", "cannot", "won't", "wouldn't", "shouldn't"
+        }
 
     def _find_class_index(self, name: str, default: int) -> int:
         lowered = [c.lower() for c in self.class_names]
@@ -232,6 +238,19 @@ class SentimentPredictor:
         tokens = self.tokenizer._tokenize(text)
         if not tokens:
             return 0.0, 0, 0
+
+        joined = " ".join(tokens)
+        # Strong explicit negative phrases.
+        if (
+            "cannot recommend" in joined
+            or "can't recommend" in joined
+            or "cant recommend" in joined
+            or "not recommend" in joined
+            or "would not recommend" in joined
+            or "do not recommend" in joined
+            or "don't recommend" in joined
+        ):
+            return -1.0, 2, 0
 
         score = 0.0
         neg_hits = 0
@@ -269,7 +288,7 @@ class SentimentPredictor:
         lex_pos = 0.5 * (1.0 + lex_score)
 
         token_count = len(self.tokenizer._tokenize(text))
-        alpha = 0.75 if token_count <= 6 else (0.45 if token_count <= 12 else 0.25)
+        alpha = 0.8 if token_count <= 6 else (0.6 if token_count <= 12 else 0.3)
 
         calibrated = list(probs)
         calibrated[self.negative_idx] = (1 - alpha) * probs[self.negative_idx] + alpha * lex_neg
@@ -278,6 +297,9 @@ class SentimentPredictor:
         if token_count <= 8 and neg_hits > 0 and pos_hits == 0 and lex_score <= -0.3:
             calibrated[self.negative_idx] = max(calibrated[self.negative_idx], 0.80)
             calibrated[self.positive_idx] = min(calibrated[self.positive_idx], 0.20)
+        if neg_hits >= 2 and pos_hits == 0 and lex_score <= -0.6:
+            calibrated[self.negative_idx] = max(calibrated[self.negative_idx], 0.85)
+            calibrated[self.positive_idx] = min(calibrated[self.positive_idx], 0.15)
 
         total = sum(calibrated)
         if total > 0:

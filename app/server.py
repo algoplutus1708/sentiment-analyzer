@@ -42,7 +42,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             return self._send_json(
                 HTTPStatus.OK,
-                {"status": "ok", "model_loaded": True, "labels": predictor.class_names},
+                {
+                    "status": "ok",
+                    "model_loaded": True,
+                    "labels": predictor.class_names,
+                    "inference_version": predictor.inference_version,
+                },
             )
 
         if parsed.path.startswith("/static/"):
@@ -86,6 +91,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 "label": prediction.label,
                 "confidence": round(prediction.confidence, 6),
                 "probabilities": {k: round(v, 6) for k, v in prediction.probabilities.items()},
+                "inference_version": predictor.inference_version,
             },
         )
 
