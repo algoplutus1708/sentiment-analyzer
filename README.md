@@ -3,7 +3,7 @@
 This project includes:
 - `LLM.ipynb` for training/exporting the model
 - Python backend API for inference (`app/server.py`)
-- Browser frontend (`templates/` + `static/`)
+- React frontend (`templates/` + `static/`)
 
 ## Prerequisites
 - Python 3.10+
@@ -37,3 +37,4 @@ Example request body:
 ## Notes
 - If `tinyllm_complete.pt` is missing, run notebook training/saving first.
 - Frontend calls backend endpoint `/api/predict`.
+- React is loaded via CDN in `templates/index.html`, so internet access is needed in browser for React scripts.

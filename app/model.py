@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-INFERENCE_VERSION = "hybrid-cal-v2"
+INFERENCE_VERSION = "tinyllm-neutral-guard-v1"
 
 
 class SimpleTokenizer:
@@ -207,68 +207,34 @@ class SentimentPredictor:
         self.model.eval()
         self.max_len = self.model_config.get("max_len", 160)
         self.inference_version = INFERENCE_VERSION
-        self.negative_idx = self._find_class_index("negative", default=0)
-        self.positive_idx = self._find_class_index("positive", default=1)
-
-        # Lexicon boost for short/generic emotional sentences that are out-of-domain for IMDB.
-        self.negative_words = {
-            "sad", "bad", "awful", "terrible", "horrible", "depressed", "upset",
-            "angry", "hate", "lonely", "miserable", "worst", "pain", "hurt",
-            "cry", "crying", "disappointed", "disappointing", "stress", "stressed",
-            "anxious", "anxiety", "tired", "hopeless", "unhappy", "sucks"
+        self.greeting_words = {
+            "hi", "hello", "hey", "yo", "sup", "what's", "whats", "up", "good", "morning", "evening"
         }
-        self.positive_words = {
-            "good", "great", "awesome", "amazing", "excellent", "happy", "love",
-            "loved", "joy", "joyful", "best", "fantastic", "wonderful", "brilliant",
-            "excited", "calm", "peaceful", "pleased", "delight", "satisfied"
-        }
-        self.negators = {
-            "not", "never", "no", "isn't", "wasn't", "don't", "didn't",
-            "cant", "can't", "cannot", "won't", "wouldn't", "shouldn't"
+        self.sentiment_words = {
+            "good", "great", "excellent", "amazing", "love", "awesome", "best",
+            "bad", "terrible", "awful", "hate", "worst", "sad", "happy",
+            "recommend", "disappointed", "boring", "fantastic", "wonderful"
         }
 
-    def _find_class_index(self, name: str, default: int) -> int:
-        lowered = [c.lower() for c in self.class_names]
-        for i, class_name in enumerate(lowered):
-            if name in class_name:
-                return i
-        return default
-
-    def _lexicon_score(self, text: str):
-        tokens = self.tokenizer._tokenize(text)
+    def _is_non_sentiment_text(self, text: str) -> bool:
+        tokens = [t for t in self.tokenizer._tokenize(text) if t not in {".", ",", "!", "?"}]
         if not tokens:
-            return 0.0, 0, 0
+            return True
 
         joined = " ".join(tokens)
-        # Strong explicit negative phrases.
-        if (
-            "cannot recommend" in joined
-            or "can't recommend" in joined
-            or "cant recommend" in joined
-            or "not recommend" in joined
-            or "would not recommend" in joined
-            or "do not recommend" in joined
-            or "don't recommend" in joined
-        ):
-            return -1.0, 2, 0
+        has_question = "?" in text or joined.startswith(("what", "how", "why", "when", "where"))
+        sentiment_hits = sum(1 for t in tokens if t in self.sentiment_words)
+        greeting_hits = sum(1 for t in tokens if t in self.greeting_words)
 
-        score = 0.0
-        neg_hits = 0
-        pos_hits = 0
-        for i, tok in enumerate(tokens):
-            if tok in {".", ",", "!", "?"}:
-                continue
-
-            prev_is_negator = i > 0 and tokens[i - 1] in self.negators
-            if tok in self.negative_words:
-                neg_hits += 1
-                score += -1.0 if not prev_is_negator else 1.0
-            elif tok in self.positive_words:
-                pos_hits += 1
-                score += 1.0 if not prev_is_negator else -1.0
-
-        # Normalize to [-1, 1], where +1 => strongly positive, -1 => strongly negative.
-        return max(-1.0, min(1.0, score / 3.0)), neg_hits, pos_hits
+        # Very short conversational text with no clear sentiment cue.
+        if len(tokens) <= 4 and sentiment_hits == 0:
+            return True
+        # Greetings/questions like "what's up", "hi", "how are you".
+        if greeting_hits > 0 and sentiment_hits == 0 and len(tokens) <= 7:
+            return True
+        if has_question and sentiment_hits == 0 and len(tokens) <= 8:
+            return True
+        return False
 
     def predict(self, text: str) -> Prediction:
         if not text or not text.strip():
@@ -282,38 +248,29 @@ class SentimentPredictor:
             logits = self.model(input_ids, attention_mask)
             probs = torch.softmax(logits, dim=1)[0].detach().cpu().tolist()
 
-        # Hybrid calibration: blend model probability with lexical prior.
-        lex_score, neg_hits, pos_hits = self._lexicon_score(text)
-        lex_neg = 0.5 * (1.0 - lex_score)
-        lex_pos = 0.5 * (1.0 + lex_score)
+        if self._is_non_sentiment_text(text):
+            # Add a neutral fallback for non-review conversational text.
+            neg = 0.1 * probs[0]
+            pos = 0.1 * probs[1] if len(probs) > 1 else 0.0
+            neutral = 1.0 - (neg + pos)
+            probabilities = {
+                "Negative": float(neg),
+                "Positive": float(pos),
+                "Neutral": float(neutral),
+            }
+            return Prediction(
+                label="Neutral",
+                confidence=float(neutral),
+                probabilities=probabilities,
+            )
 
-        token_count = len(self.tokenizer._tokenize(text))
-        alpha = 0.8 if token_count <= 6 else (0.6 if token_count <= 12 else 0.3)
-
-        calibrated = list(probs)
-        calibrated[self.negative_idx] = (1 - alpha) * probs[self.negative_idx] + alpha * lex_neg
-        calibrated[self.positive_idx] = (1 - alpha) * probs[self.positive_idx] + alpha * lex_pos
-
-        if token_count <= 8 and neg_hits > 0 and pos_hits == 0 and lex_score <= -0.3:
-            calibrated[self.negative_idx] = max(calibrated[self.negative_idx], 0.80)
-            calibrated[self.positive_idx] = min(calibrated[self.positive_idx], 0.20)
-        if neg_hits >= 2 and pos_hits == 0 and lex_score <= -0.6:
-            calibrated[self.negative_idx] = max(calibrated[self.negative_idx], 0.85)
-            calibrated[self.positive_idx] = min(calibrated[self.positive_idx], 0.15)
-
-        total = sum(calibrated)
-        if total > 0:
-            calibrated = [p / total for p in calibrated]
-        else:
-            calibrated = probs
-
-        best_idx = int(torch.argmax(torch.tensor(calibrated)).item())
+        best_idx = int(torch.argmax(torch.tensor(probs)).item())
         probabilities = {
-            self.class_names[i]: float(calibrated[i]) for i in range(len(self.class_names))
+            self.class_names[i]: float(probs[i]) for i in range(len(self.class_names))
         }
 
         return Prediction(
             label=self.class_names[best_idx],
-            confidence=float(calibrated[best_idx]),
+            confidence=float(probs[best_idx]),
             probabilities=probabilities,
         )

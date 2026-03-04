@@ -53,12 +53,17 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/static/"):
             relative = parsed.path.replace("/static/", "", 1)
             file_path = (STATIC_DIR / relative).resolve()
+            if relative == "app.js" and not file_path.exists():
+                # Backward-compatible path for older cached HTML.
+                file_path = (STATIC_DIR / "app.jsx").resolve()
             if STATIC_DIR.resolve() not in file_path.parents and file_path != STATIC_DIR.resolve():
                 return self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
 
             if file_path.suffix == ".css":
                 return self._send_file(file_path, "text/css; charset=utf-8")
             if file_path.suffix == ".js":
+                return self._send_file(file_path, "application/javascript; charset=utf-8")
+            if file_path.suffix == ".jsx":
                 return self._send_file(file_path, "application/javascript; charset=utf-8")
             return self._send_file(file_path, "application/octet-stream")
 
@@ -99,7 +104,12 @@ class AppHandler(BaseHTTPRequestHandler):
 def run(host="127.0.0.1", port=8000):
     server = ThreadingHTTPServer((host, port), AppHandler)
     print(f"Server running at http://{host}:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
