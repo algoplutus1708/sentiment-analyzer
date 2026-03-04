@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dataset files
+aclImdb/
+aclImdb_v1.tar.gz
+
+# Training artifacts
+best_model.pt
+tinyllm_complete.pt
+model_summary.txt
+tokenizer_vocab.json
