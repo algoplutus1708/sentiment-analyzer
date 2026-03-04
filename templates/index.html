@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sentiment Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section class="card">
+        <h1>Sentiment Analyzer</h1>
+        <p class="subtitle">Enter a movie review and get sentiment prediction from your TinyLLM model.</p>
+
+        <label for="review-input">Review text</label>
+        <textarea
+          id="review-input"
+          rows="8"
+          placeholder="Type or paste review text here..."
+        ></textarea>
+
+        <button id="predict-btn" type="button">Predict Sentiment</button>
+
+        <div id="loading" class="hidden">Predicting...</div>
+        <div id="error" class="error hidden"></div>
+
+        <section id="result" class="result hidden">
+          <h2>Prediction</h2>
+          <p><strong>Label:</strong> <span id="label"></span></p>
+          <p><strong>Confidence:</strong> <span id="confidence"></span></p>
+          <div id="probs"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
