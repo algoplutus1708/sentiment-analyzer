@@ -85,6 +85,7 @@ function App() {
       <section className="card">
         <h1>Sentiment Analyzer</h1>
         <p className="subtitle">Enter text and get sentiment prediction from your TinyLLM model.</p>
+        <p className="subtitle">Built by Swastick</p>
 
         <label htmlFor="review-input">Input text</label>
         <textarea

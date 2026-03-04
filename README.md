@@ -1,5 +1,7 @@
 # Sentiment Analyzer Web App
 
+Built by Swastick.
+
 This project includes:
 - `LLM.ipynb` for training/exporting the model
 - Python backend API for inference (`app/server.py`)
