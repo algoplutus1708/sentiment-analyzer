@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 # Author: Swastick
-INFERENCE_VERSION = "tinyllm-neutral-guard-v2"
+INFERENCE_VERSION = "tinyllm-mixed-guard-v3"
 
 
 class SimpleTokenizer:
@@ -217,16 +217,20 @@ class SentimentPredictor:
             "good", "great", "excellent", "amazing", "love", "awesome", "best",
             "bad", "terrible", "awful", "hate", "worst", "sad", "happy",
             "recommend", "disappointed", "boring", "fantastic", "wonderful",
-            "frustrating", "confusing", "slow", "buggy", "broken", "annoying", "poor"
+            "frustrating", "confusing", "slow", "buggy", "broken", "annoying", "poor",
+            "beautiful", "strong", "impressive", "watchable", "enjoyable",
+            "disappointing", "uneven", "dragging", "long"
         }
         self.positive_words = {
             "good", "great", "excellent", "amazing", "love", "awesome", "best", "happy",
-            "recommend", "fantastic", "wonderful", "smooth", "fast", "clean", "simple", "useful"
+            "recommend", "fantastic", "wonderful", "smooth", "fast", "clean", "simple", "useful",
+            "beautiful", "strong", "impressive", "watchable", "enjoyable"
         }
         self.negative_words = {
             "bad", "terrible", "awful", "hate", "worst", "sad", "disappointed", "boring",
             "frustrating", "confusing", "slow", "buggy", "broken", "annoying", "poor",
-            "laggy", "difficult", "hard", "issues", "problem", "problems", "error", "errors"
+            "laggy", "difficult", "hard", "issues", "problem", "problems", "error", "errors",
+            "disappointing", "uneven", "dragging", "long"
         }
         self.negation_words = {"not", "no", "never", "hardly", "rarely", "n't"}
         self.clause_shift_words = {"but", "however", "though", "although", "yet"}
@@ -342,6 +346,20 @@ class SentimentPredictor:
         pos = probs[1] + 0.18 * pos_score
         return self._normalize_probs(neg, pos)
 
+    def _should_mark_mixed(self, text: str, neg_prob: float, pos_prob: float) -> bool:
+        tokens = [t for t in self.tokenizer._tokenize(text) if t not in {".", ",", "!", "?"}]
+        if len(tokens) < 16:
+            return False
+
+        pos_hits = sum(1 for t in tokens if t in self.positive_words)
+        neg_hits = sum(1 for t in tokens if t in self.negative_words)
+        if pos_hits < 2 or neg_hits < 2:
+            return False
+
+        has_contrast = any(t in self.clause_shift_words for t in tokens)
+        prob_gap = abs(pos_prob - neg_prob)
+        return has_contrast and prob_gap <= 0.6
+
     def predict(self, text: str) -> Prediction:
         if not text or not text.strip():
             raise ValueError("Input text cannot be empty")
@@ -361,6 +379,26 @@ class SentimentPredictor:
             neg = 0.1 * probs[0]
             pos = 0.1 * probs[1] if len(probs) > 1 else 0.0
             neutral = 1.0 - (neg + pos)
+            probabilities = {
+                "Negative": float(neg),
+                "Positive": float(pos),
+                "Neutral": float(neutral),
+            }
+            positive_reply, negative_reply = self._build_replies(text, "Neutral", float(neutral))
+            return Prediction(
+                label="Neutral",
+                confidence=float(neutral),
+                probabilities=probabilities,
+                positive_reply=positive_reply,
+                negative_reply=negative_reply,
+            )
+
+        if self._should_mark_mixed(text, probs[0], probs[1]):
+            balance = 1.0 - abs(probs[1] - probs[0])
+            neutral = min(0.7, max(0.34, 0.25 + 0.45 * balance))
+            carry = 1.0 - neutral
+            neg = carry * probs[0]
+            pos = carry * probs[1]
             probabilities = {
                 "Negative": float(neg),
                 "Positive": float(pos),
