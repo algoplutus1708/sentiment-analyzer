@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 # Author: Swastick
-INFERENCE_VERSION = "tinyllm-neutral-guard-v1"
+INFERENCE_VERSION = "tinyllm-neutral-guard-v2"
 
 
 class SimpleTokenizer:
@@ -181,6 +181,8 @@ class Prediction:
     label: str
     confidence: float
     probabilities: dict
+    positive_reply: str
+    negative_reply: str
 
 
 class SentimentPredictor:
@@ -214,8 +216,55 @@ class SentimentPredictor:
         self.sentiment_words = {
             "good", "great", "excellent", "amazing", "love", "awesome", "best",
             "bad", "terrible", "awful", "hate", "worst", "sad", "happy",
-            "recommend", "disappointed", "boring", "fantastic", "wonderful"
+            "recommend", "disappointed", "boring", "fantastic", "wonderful",
+            "frustrating", "confusing", "slow", "buggy", "broken", "annoying", "poor"
         }
+        self.positive_words = {
+            "good", "great", "excellent", "amazing", "love", "awesome", "best", "happy",
+            "recommend", "fantastic", "wonderful", "smooth", "fast", "clean", "simple", "useful"
+        }
+        self.negative_words = {
+            "bad", "terrible", "awful", "hate", "worst", "sad", "disappointed", "boring",
+            "frustrating", "confusing", "slow", "buggy", "broken", "annoying", "poor",
+            "laggy", "difficult", "hard", "issues", "problem", "problems", "error", "errors"
+        }
+        self.negation_words = {"not", "no", "never", "hardly", "rarely", "n't"}
+        self.clause_shift_words = {"but", "however", "though", "although", "yet"}
+
+    def _build_replies(self, text: str, predicted_label: str, confidence: float) -> tuple[str, str]:
+        cleaned = " ".join(text.strip().split())
+        if not cleaned:
+            cleaned = "your input"
+        if len(cleaned) > 160:
+            cleaned = cleaned[:157].rstrip() + "..."
+
+        label = predicted_label.lower()
+        if label == "positive":
+            positive_reply = (
+                f"That sounds positive overall. Thanks for sharing: \"{cleaned}\"."
+            )
+            negative_reply = (
+                "A negative interpretation could be that some details might still feel disappointing."
+            )
+        elif label == "negative":
+            positive_reply = (
+                "A positive interpretation could be that this can still improve with the right changes."
+            )
+            negative_reply = (
+                f"That sounds frustrating and negative overall: \"{cleaned}\"."
+            )
+        else:
+            positive_reply = (
+                f"A positive take could be that this is neutral but still potentially good: \"{cleaned}\"."
+            )
+            negative_reply = (
+                "A negative take could be that the statement is uncertain and may hide dissatisfaction."
+            )
+
+        if confidence >= 0.9:
+            positive_reply += " (High confidence)"
+            negative_reply += " (High confidence)"
+        return positive_reply, negative_reply
 
     def _is_non_sentiment_text(self, text: str) -> bool:
         tokens = [t for t in self.tokenizer._tokenize(text) if t not in {".", ",", "!", "?"}]
@@ -237,6 +286,62 @@ class SentimentPredictor:
             return True
         return False
 
+    def _normalize_probs(self, neg: float, pos: float) -> tuple[float, float]:
+        neg = max(0.0, float(neg))
+        pos = max(0.0, float(pos))
+        total = neg + pos
+        if total <= 1e-8:
+            return 0.5, 0.5
+        return neg / total, pos / total
+
+    def _apply_lexicon_correction(self, text: str, probs: list[float]) -> tuple[float, float]:
+        if len(probs) < 2:
+            return 0.5, 0.5
+
+        tokens = [t for t in self.tokenizer._tokenize(text) if t not in {".", ",", "!", "?"}]
+        if not tokens:
+            return self._normalize_probs(probs[0], probs[1])
+        token_text = " ".join(tokens)
+
+        if re.search(r"\bnot\s+(bad|terrible|awful|worst|disappointing|frustrating)\b", token_text):
+            return self._normalize_probs(probs[0], probs[1] + 1.0)
+        if re.search(r"\bnot\s+(good|great|excellent|amazing|awesome|wonderful)\b", token_text):
+            return self._normalize_probs(probs[0] + 1.0, probs[1])
+
+        neg_score = 0.0
+        pos_score = 0.0
+        split_idx = -1
+        for i, tok in enumerate(tokens):
+            if tok in self.clause_shift_words:
+                split_idx = i
+                break
+
+        for i, tok in enumerate(tokens):
+            negated = any(tokens[j] in self.negation_words for j in range(max(0, i - 3), i))
+            weight = 1.35 if split_idx >= 0 and i > split_idx else 1.0
+
+            if tok in self.positive_words:
+                if negated:
+                    neg_score += 2.2 * weight
+                else:
+                    pos_score += 1.0 * weight
+            elif tok in self.negative_words:
+                if negated:
+                    pos_score += 2.4 * weight
+                else:
+                    neg_score += 1.2 * weight
+
+        # If only complaint cues are present, force a stronger correction.
+        if neg_score >= 1.2 and pos_score == 0.0:
+            neg = probs[0] + 1.2 + 0.25 * neg_score
+            pos = probs[1]
+            return self._normalize_probs(neg, pos)
+
+        # Calibrate probabilities toward lexical sentiment cues.
+        neg = probs[0] + 0.18 * neg_score
+        pos = probs[1] + 0.18 * pos_score
+        return self._normalize_probs(neg, pos)
+
     def predict(self, text: str) -> Prediction:
         if not text or not text.strip():
             raise ValueError("Input text cannot be empty")
@@ -248,6 +353,8 @@ class SentimentPredictor:
         with torch.no_grad():
             logits = self.model(input_ids, attention_mask)
             probs = torch.softmax(logits, dim=1)[0].detach().cpu().tolist()
+        neg_prob, pos_prob = self._apply_lexicon_correction(text, probs)
+        probs = [neg_prob, pos_prob]
 
         if self._is_non_sentiment_text(text):
             # Add a neutral fallback for non-review conversational text.
@@ -259,19 +366,27 @@ class SentimentPredictor:
                 "Positive": float(pos),
                 "Neutral": float(neutral),
             }
+            positive_reply, negative_reply = self._build_replies(text, "Neutral", float(neutral))
             return Prediction(
                 label="Neutral",
                 confidence=float(neutral),
                 probabilities=probabilities,
+                positive_reply=positive_reply,
+                negative_reply=negative_reply,
             )
 
         best_idx = int(torch.argmax(torch.tensor(probs)).item())
         probabilities = {
             self.class_names[i]: float(probs[i]) for i in range(len(self.class_names))
         }
+        label = self.class_names[best_idx]
+        confidence = float(probs[best_idx])
+        positive_reply, negative_reply = self._build_replies(text, label, confidence)
 
         return Prediction(
-            label=self.class_names[best_idx],
-            confidence=float(probs[best_idx]),
+            label=label,
+            confidence=confidence,
             probabilities=probabilities,
+            positive_reply=positive_reply,
+            negative_reply=negative_reply,
         )

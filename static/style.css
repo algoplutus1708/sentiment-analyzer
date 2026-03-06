@@ -90,6 +90,38 @@ button:hover {
   padding-top: 16px;
 }
 
+.replies {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.reply {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.reply h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.reply p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.reply.positive {
+  background: #ecfdf5;
+  border-color: #86efac;
+}
+
+.reply.negative {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
 #probs {
   margin-top: 8px;
   display: grid;

@@ -97,6 +97,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 "label": prediction.label,
                 "confidence": round(prediction.confidence, 6),
                 "probabilities": {k: round(v, 6) for k, v in prediction.probabilities.items()},
+                "positive_reply": prediction.positive_reply,
+                "negative_reply": prediction.negative_reply,
                 "inference_version": predictor.inference_version,
             },
         )

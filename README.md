@@ -36,6 +36,13 @@ Example request body:
 }
 ```
 
+Example response fields include:
+- `label`
+- `confidence`
+- `probabilities`
+- `positive_reply`
+- `negative_reply`
+
 ## Notes
 - If `tinyllm_complete.pt` is missing, run notebook training/saving first.
 - Frontend calls backend endpoint `/api/predict`.

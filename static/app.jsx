@@ -111,6 +111,22 @@ function App() {
               <strong>Confidence:</strong> {formatPercent(result.confidence)}
             </p>
             <ProbabilityBars probabilities={result.probabilities} />
+            {result.positive_reply || result.negative_reply ? (
+              <div className="replies">
+                {result.positive_reply ? (
+                  <div className="reply positive">
+                    <h3>Positive Reply</h3>
+                    <p>{result.positive_reply}</p>
+                  </div>
+                ) : null}
+                {result.negative_reply ? (
+                  <div className="reply negative">
+                    <h3>Negative Reply</h3>
+                    <p>{result.negative_reply}</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {result.inference_version ? (
               <p className="subtitle">Inference: {result.inference_version}</p>
             ) : null}
