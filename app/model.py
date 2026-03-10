@@ -206,6 +206,19 @@ class TinyLLM(nn.Module):
                 nn.Linear(d_model, num_classes),
             )
 
+        self._init_weights()
+
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        if self.pad_idx is not None:
+            self.token_embedding.weight.data[self.pad_idx].zero_()
+
     def forward(self, x, attention_mask=None):
         if attention_mask is None:
             attention_mask = (x != self.pad_idx).long()
